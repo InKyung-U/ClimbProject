@@ -30,11 +30,6 @@ void UCustomMovementComponent::BeginPlay()
 void UCustomMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	const FVector UnrotatedLastInputVector =
-		UKismetMathLibrary::Quat_UnrotateVector(UpdatedComponent->GetComponentQuat(), GetLastInputVector());
-
-	Debug::Print(UnrotatedLastInputVector.GetSafeNormal().ToString(), FColor::Cyan, 1);
 }
 
 void UCustomMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode)
@@ -439,7 +434,7 @@ bool UCustomMovementComponent::CanStartVaulting(FVector& OutVaultStartPosition, 
 	for (int32 i = 0; i < 5; i++)
 	{
 		const FVector Start = ComponentLocation + UpVector * 100.f + 
-			ComponentForward * 100.f * (i + 1);
+			ComponentForward * 80.f * (i + 1);
 
 		const FVector End = Start + DownVector * 100.f * (i + 1);
 
@@ -482,14 +477,17 @@ bool UCustomMovementComponent::TraceClimableSurface()
 	return !ClimbableSurfaceTraceResults.IsEmpty();
 }
 
-FHitResult UCustomMovementComponent::TraceFromEyeHeight(float TraceDistance, float TraceStartOffset)
+FHitResult UCustomMovementComponent::TraceFromEyeHeight(float TraceDistance, float TraceStartOffset,
+	bool bShowDebugSphere, bool bDrawPersistantShapes, float LeftOrRightOffset)
 {
 	const FVector ComponentLocation = UpdatedComponent->GetComponentLocation();
 	const FVector EyeHeightOffset = UpdatedComponent->GetUpVector() * (CharacterOwner->BaseEyeHeight + TraceStartOffset);
-	const FVector Start = UpdatedComponent->GetComponentLocation() + EyeHeightOffset;
+	const FVector Start = UpdatedComponent->GetComponentLocation() + EyeHeightOffset
+		+ (CharacterOwner->GetActorRightVector() * LeftOrRightOffset);
 	const FVector End = Start + UpdatedComponent->GetForwardVector() * TraceDistance;
-
-	return DoLineTraceSingleByObject(Start, End);
+	
+	
+	return DoLineTraceSingleByObject(Start, End, bShowDebugSphere, bDrawPersistantShapes);
 }
 
 void UCustomMovementComponent::PlayClimbMontage(UAnimMontage* MontageToPlay)
@@ -520,7 +518,34 @@ void UCustomMovementComponent::RequestHopping()
 	const FVector UnrotatedLastInputVector = 
 	UKismetMathLibrary::Quat_UnrotateVector(UpdatedComponent->GetComponentQuat(), GetLastInputVector());
 	
-	Debug::Print(UnrotatedLastInputVector.GetSafeNormal().ToString(), FColor::Cyan,1 );
+	const float DotResult = 
+		FVector::DotProduct(UnrotatedLastInputVector.GetSafeNormal(), FVector::UpVector);
+
+	const float DotResult2 =
+		//FVector::DotProduct(UnrotatedLastInputVector.GetSafeNormal(), OwningPlayerCharacter->GetActorRightVector().GetSafeNormal());
+		FVector::DotProduct(UnrotatedLastInputVector.GetSafeNormal(), FVector::RightVector);
+
+	if (DotResult >= 0.9f)
+	{
+		//Debug::Print(TEXT("Hop Up"));
+		HandleHopUp();
+	}
+	else if (DotResult <= -0.9f)
+	{
+		//Debug::Print(TEXT("Hop Down"));
+		HandleHopUDown();
+	}
+
+	if (DotResult2 >= 0.9f)
+	{
+		//Debug::Print(TEXT("Hop Right"));
+		HandleHopRight();
+	}
+	else if (DotResult2 <= -0.9f)
+	{
+		//Debug::Print(TEXT("Hop Left"));
+		HandleHopLeft();
+	}
 }
 
 void UCustomMovementComponent::SetMotionWarpTarget(const FName& InWarpTargetName, const FVector& InTargetPosition)
@@ -529,6 +554,102 @@ void UCustomMovementComponent::SetMotionWarpTarget(const FName& InWarpTargetName
 
 	OwningPlayerCharacter->GetMotionWarpingComponent()->
 		AddOrUpdateWarpTargetFromLocation(InWarpTargetName, InTargetPosition);
+}
+
+void UCustomMovementComponent::HandleHopUp()
+{
+	FVector HopUpTargetPoint;
+	if (CheckCanHopUp(HopUpTargetPoint))
+	{
+		if (!HopUpMontage) return;
+
+		SetMotionWarpTarget(FName("HopUpTargetPoint"), HopUpTargetPoint);
+		PlayClimbMontage(HopUpMontage);
+	}
+}
+
+bool UCustomMovementComponent::CheckCanHopUp(FVector& OutHopUpTargetPosition)
+{
+	FHitResult HopUpHit = TraceFromEyeHeight(100.f, -20.f);
+	FHitResult SaftyLedgeHit = TraceFromEyeHeight(100.f, 150.f);
+
+	if (HopUpHit.bBlockingHit && SaftyLedgeHit.bBlockingHit)
+	{
+		OutHopUpTargetPosition = HopUpHit.ImpactPoint;
+		return true;
+	}
+	return false;
+}
+
+void UCustomMovementComponent::HandleHopUDown()
+{
+	FVector HopDownTargetPoint;
+	if (CheckCanHopDown(HopDownTargetPoint))
+	{
+		if (!HopDownMontage) return;
+		SetMotionWarpTarget(FName("HopDownTargetPoint"), HopDownTargetPoint);
+		PlayClimbMontage(HopDownMontage);
+	}
+}
+
+bool UCustomMovementComponent::CheckCanHopDown(FVector& OutHopDownTargetPosition)
+{
+	FHitResult HopDownHit = TraceFromEyeHeight(100.f, -300.f);
+
+	if (HopDownHit.bBlockingHit)
+	{
+		OutHopDownTargetPosition = HopDownHit.ImpactPoint;
+		return true;
+	}
+	return false;
+}
+
+void UCustomMovementComponent::HandleHopLeft()
+{
+	FVector HopLeftTargetPoint;
+	if (CheckCanHopLeft(HopLeftTargetPoint))
+	{
+		if (!HopLeftMontage) return;
+
+		SetMotionWarpTarget(FName("HopLeftTargetPoint"), HopLeftTargetPoint);
+		PlayClimbMontage(HopLeftMontage);
+	}
+}
+
+bool UCustomMovementComponent::CheckCanHopLeft(FVector& OutHopLeftTargetPosition)
+{
+	FHitResult HopLeftHit = TraceFromEyeHeight(100.f, -150.f, false, false, -150.f);
+
+	if (HopLeftHit.bBlockingHit)
+	{
+		OutHopLeftTargetPosition = HopLeftHit.ImpactPoint;
+		return true;
+	}
+	return false;
+}
+
+void UCustomMovementComponent::HandleHopRight()
+{
+	FVector HopRightTargetPoint;
+	if (CheckCanHopRight(HopRightTargetPoint))
+	{
+		if (!HopRightMontage) return;
+
+		SetMotionWarpTarget(FName("HopRightTargetPoint"), HopRightTargetPoint);
+		PlayClimbMontage(HopRightMontage);
+	}
+}
+
+bool UCustomMovementComponent::CheckCanHopRight(FVector& OutHopRightTargetPosition)
+{
+	FHitResult HopRightHit = TraceFromEyeHeight(100.f, -150.f, false, false, 150.f);
+
+	if (HopRightHit.bBlockingHit)
+	{
+		OutHopRightTargetPosition = HopRightHit.ImpactPoint;
+		return true;
+	}
+	return false;
 }
 
 FVector UCustomMovementComponent::GetUnrotatedClimbVelocity() const
